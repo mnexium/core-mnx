@@ -31,7 +31,7 @@ CORE is intended to be the memory and truth substrate behind apps, agents, and w
 
 ## Documentation map
 
-- Setup and initialization: [docs/SETUP.md](docs/SETUP.md)
-- Runtime behavior and decision logic: [docs/BEHAVIOR.md](docs/BEHAVIOR.md)
-- HTTP endpoints and contracts: [docs/API.md](docs/API.md)
-- Production hardening checklist: [docs/OPERATIONS.md](docs/OPERATIONS.md)
+- Setup and initialization: [docs/SETUP.md](https://github.com/mnexium/core-mnx/blob/main/docs/SETUP.md)
+- Runtime behavior and decision logic: [docs/BEHAVIOR.md](https://github.com/mnexium/core-mnx/blob/main/docs/BEHAVIOR.md)
+- HTTP endpoints and contracts: [docs/API.md](https://github.com/mnexium/core-mnx/blob/main/docs/API.md)
+- Production hardening checklist: [docs/OPERATIONS.md](https://github.com/mnexium/core-mnx/blob/main/docs/OPERATIONS.md)
