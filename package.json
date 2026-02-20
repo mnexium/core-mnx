@@ -1,8 +1,10 @@
 {
   "name": "@mnexium/core",
-  "private": true,
   "version": "0.1.0",
   "type": "module",
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "dev": "tsx src/dev.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
