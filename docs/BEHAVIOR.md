@@ -1,241 +1,224 @@
-# Runtime Behavior
+# 🧠 Runtime Behavior
 
-This document describes how CORE behaves at runtime, including AI mode selection, memory handling, claim semantics, and SSE events.
+This document explains how CORE decides retrieval/extraction behavior at runtime and how memory + claim state changes flow through the system.
 
-## High-level architecture
+## 🏗️ Request Lifecycle
 
 CORE server path:
 
 1. Receive HTTP request
 2. Resolve `project_id`
-3. Dispatch to route handler
-4. Route calls `CoreStore` contract
-5. Postgres adapter executes SQL
-6. Route returns JSON response
+3. Dispatch route handler
+4. Execute storage contract (`CoreStore`)
+5. Return JSON (or SSE stream)
 
-Key implementation files:
+Primary implementation files:
 
-- HTTP server: `src/server/createCoreServer.ts`
-- Storage adapter: `src/adapters/postgres/PostgresCoreStore.ts`
-- AI recall: `src/ai/recallService.ts`
-- AI extraction: `src/ai/memoryExtractionService.ts`
+- `src/server/createCoreServer.ts`
+- `src/adapters/postgres/PostgresCoreStore.ts`
+- `src/ai/recallService.ts`
+- `src/ai/memoryExtractionService.ts`
 
-## AI mode resolution
+## 🤖 AI Provider Resolution
 
 Configured by `CORE_AI_MODE`:
 
+- `auto` (default)
 - `cerebras`
 - `openai`
 - `simple`
-- `auto` (default)
 
-Resolution rules:
+Resolution behavior (`src/dev.ts`):
 
 - `auto`
-  - if `CEREBRAS_API` exists -> use Cerebras
-  - else if `OPENAI_API_KEY` exists -> use OpenAI
-  - else -> use simple mode
+  - use Cerebras when `CEREBRAS_API` exists
+  - else use OpenAI when `OPENAI_API_KEY` exists
+  - else use `simple`
 - `cerebras`
   - requires `CEREBRAS_API`
-  - if missing -> warning + simple mode
+  - if missing, warns and falls back to `simple`
   - does not auto-switch to OpenAI
 - `openai`
   - requires `OPENAI_API_KEY`
-  - if missing -> warning + simple mode
+  - if missing, warns and falls back to `simple`
   - does not auto-switch to Cerebras
 - `simple`
-  - always simple mode, no LLM client
+  - no LLM client
 
-`RETRIEVAL_MODEL` is passed to the selected LLM provider.
+`RETRIEVAL_MODEL` is passed to the selected LLM client.
 
-Both retrieval (`/memories/search`) and extraction (`/memories/extract`) use the resolved LLM client when available. If no LLM client is resolved, both routes still run using simple fallback behavior.
+## 🔎 Retrieval Behavior (`GET /api/v1/memories/search`)
 
-## Retrieval expansion toggle
+### Retrieval toggle
 
-`USE_RETRIEVAL_EXPAND=true|false`
+`USE_RETRIEVAL_EXPAND=true|false`:
 
 - `true`
-  - if an LLM client exists, search uses LLM mode:
-    - classify query (`broad|direct|indirect`)
-    - optional query expansion
-    - optional reranking
-  - if no LLM client exists, simple search path is used
+  - with LLM client: classify + expand + rerank path
+  - without LLM client: simple path
 - `false`
-  - always uses simple search path, even if LLM keys are present
-  - extraction still uses LLM if an LLM client exists (toggle is retrieval-only)
-
-## Search behavior (`GET /api/v1/memories/search`)
+  - always simple search path
+  - extraction endpoint can still use LLM if an LLM client exists
 
 ### Query mode semantics (`broad|direct|indirect`)
 
-Classification output controls how recall is executed:
+Mode is produced by an LLM classifier in `src/ai/recallService.ts`.
 
 - `broad`
-  - intent: profile/summary requests (for example, "what do you know about this user?")
-  - path: list active memories, then sort by `importance` and recency
-  - behavior: bypasses multi-query expansion and reranking; returns a wider profile set (`max(limit, 20)`)
+  - intent: profile/summary requests
+  - behavior: list active memories and sort by importance + recency
+  - output pattern: wider profile set (`max(limit, 20)`)
 - `direct`
-  - intent: specific fact lookup (for example, "what city does she live in?")
-  - path: search using original query + LLM search hints, then attempt claim/truth-based boosts for matched predicates
-  - behavior: prefers high-precision results; typically narrows to small result sets (often capped to top 5)
+  - intent: specific fact lookup
+  - behavior: search with hints, then boost claim-backed memories when predicates match truth slots
+  - output pattern: high-precision, usually narrow (often top 5)
 - `indirect`
-  - intent: advice/planning prompts where personal context may help (for example, "what gift should I get him?")
-  - path: search using original query + hints + expanded paraphrases, then optional LLM rerank
-  - behavior: broader candidate gathering with relevance refinement
+  - intent: advice/planning where personal context helps
+  - behavior: query expansion + larger candidate pool + rerank when needed
+  - output pattern: context-rich supporting memories
 
-Classification fallback:
+Classification fallback behavior:
 
-- if classify call fails or returns invalid mode, CORE defaults to `indirect`
-- if query text is empty, search returns no memories
+- classify failure/invalid mode -> defaults to `indirect`
+- empty query -> no memories returned
 
-### LLM expanded mode
+### LLM expanded pipeline
 
-Flow:
-
-1. classify query mode and hints/predicates
-2. build query set:
-   - `broad`: no query set expansion path; profile listing path is used
+1. Classify query into `broad|direct|indirect` and extract hints/predicates.
+2. Build query set:
+   - `broad`: profile listing path (no multi-query expansion)
    - `direct`: original + search hints
    - `indirect`: original + search hints + expanded queries
-3. search each query with embedding + lexical fallback
-   - lexical matching includes whole-phrase and token-level matching
-4. merge/deduplicate by memory id
-5. apply mode-specific ranking:
-   - `direct`: may boost memory-backed truth facts; reranks only in overflow cases
-   - `indirect`: reranks via LLM when candidate set is larger than `limit`
+3. For each query, search with embedding (if available) plus lexical fallback.
+4. Merge and dedupe by memory ID.
+5. Apply mode-specific ranking:
+   - `direct`: claim/truth boosts, rerank only when needed
+   - `indirect`: rerank via LLM when candidate set exceeds limit
 
-Response includes:
+Other runtime constraints:
 
-- `engine`: provider+model or `simple`
-- `mode`: `broad|direct|indirect|simple`
+- conversation context is capped to last 5 items
+- classify timeout is 2s
+- rerank timeout is 3s
+
+Response fields include:
+
+- `engine` (`provider:model` or `simple`)
+- `mode` (`broad|direct|indirect|simple`)
 - `used_queries`
 - `predicates`
 
-### Simple mode
+### Simple retrieval pipeline
 
-Flow:
+1. Run single query search.
+2. Use embedding if available, otherwise lexical-only path.
+3. Rank via adapter scoring.
 
-1. single query search
-2. optional embedding if available
-3. rank by adapter scoring
+No LLM classify/expand/rerank is applied.
 
-No LLM classify/expand/rerank.
+## ✂️ Extraction Behavior (`POST /api/v1/memories/extract`)
 
-## Memory extraction behavior (`POST /api/v1/memories/extract`)
+This endpoint is always available.
 
-This endpoint is always enabled.
+- With LLM client:
+  - uses extraction prompt
+  - normalizes output
+  - falls back to simple extraction on parse/failure
+- Without LLM client:
+  - uses simple heuristic extraction directly
 
-### If LLM client exists
+Learn modes:
 
-- uses LLM extraction prompt
-- normalizes output shape
-- if parsing is invalid, continues with simple extraction mode
+- `learn=false` (default): extraction-only response
+- `learn=true`: writes memories/claims and emits `memory.created` per learned memory
 
-### If no LLM client
-
-- uses simple heuristic extraction directly
-
-### Learn modes
-
-- default (`learn=false`): extraction-only response, no DB writes
-- `learn=true`:
-  - creates memories
-  - creates claims for each extracted claim
-  - emits `memory.created` SSE event per created memory
-
-## Memory lifecycle semantics
+## 🗂️ Memory Lifecycle Semantics
 
 ### Create memory (`POST /api/v1/memories`)
 
 - writes one `memories` row
-- optional embedding
-- duplicate guard: skips create when high-similarity duplicate is found
-- conflict supersede: marks medium-similarity active memories as superseded
+- optional embedding generation
+- duplicate guard when embedding similarity >= 85
+- conflict supersede when embedding similarity is in `[60, 85)`
 - emits `memory.created`
-- emits `memory.superseded` for each superseded memory
-- async claim extraction (default on):
-  - controlled by `extract_claims` (default `true`)
-  - skipped when `no_supersede=true`
-  - extracted claims are created with `source_memory_id` pointing to the new memory
+- emits `memory.superseded` for superseded conflicting memories
+- optional async claim extraction (`extract_claims=true` by default)
+
+Notes:
+
+- async extraction is skipped when `no_supersede=true`
+- extracted claims link back via `source_memory_id`
 
 ### Update memory (`PATCH /api/v1/memories/:id`)
 
-- updates existing row fields
+- patch updates supported fields
 - emits `memory.updated`
 
 ### Delete memory (`DELETE /api/v1/memories/:id`)
 
 - soft delete (`is_deleted=true`)
-- emits `memory.deleted`
+- emits `memory.deleted` when delete actually occurs
 
 ### Restore memory (`POST /api/v1/memories/:id/restore`)
 
-- sets `status='active'` and clears `superseded_by`
+- sets `status='active'`, clears `superseded_by`
 - emits `memory.updated`
-- if memory already active: returns `restored=false`
-- if memory is deleted: returns `memory_deleted`
+- deleted memories cannot be restored
 
-### Superseded listing
+### Superseded listing (`GET /api/v1/memories/superseded`)
 
-- `GET /api/v1/memories/superseded` reads `status='superseded'`
-- create path can auto-supersede based on similarity when embedding is available
+- returns non-deleted memories where `status='superseded'`
 
-## Claim semantics
+## 🧩 Claim Semantics
 
 ### Create claim (`POST /api/v1/claims`)
 
 - inserts into `claims`
-- creates assertion in `claim_assertions`
+- inserts assertion row in `claim_assertions`
 - upserts `slot_state` active winner for claim slot
 
 ### Retract claim (`POST /api/v1/claims/:id/retract`)
 
-- marks claim as `retracted`
-- attempts to restore previous active claim in same slot
+- sets claim status to `retracted`
+- restores previous active claim in same slot when available
 - updates `slot_state`
-- inserts `retracts` edge when a previous winner is restored
+- writes `retracts` edge when prior winner is restored
 
-### Truth endpoints
+### Truth/slot reads
 
-- truth and slot APIs read from `slot_state + claims`
-- claim graph/history reads claims and edges
+- truth + slot endpoints resolve from `slot_state` joined with active `claims`
+- graph/history endpoints return claims + edges
 
-## SSE event behavior
+## 📡 SSE Event Behavior
 
 Endpoint:
 
 - `GET /api/v1/events/memories`
 
-Emits:
+Event types:
 
-- `connected` on subscribe
-- `heartbeat` every 30s
+- `connected`
+- `heartbeat` (every 30s)
 - `memory.created`
+- `memory.superseded`
 - `memory.updated`
 - `memory.deleted`
 
-SSE topology notes:
+Topology:
 
-- In-process event bus only (`src/server/memoryEventBus.ts`)
-- Events are not shared across multiple server instances
-- For horizontal scale, replace with external pub/sub (Redis, NATS, Kafka, etc.)
+- in-process event bus (`src/server/memoryEventBus.ts`)
+- no cross-instance fanout by default
+- for horizontal scale, replace bus with external pub/sub (Redis/NATS/Kafka)
 
-## Explicit startup behavior
+## ⚠️ Error and Degradation Model
 
-- Database schema is not auto-created at startup.
-- Project context is resolved from `x-project-id` header or configured default.
-- Extraction/linking run inline in this service scaffold (no queue required).
+Status pattern:
 
-## Error handling model
+- `400` validation/input issues
+- `404` missing resource or route
+- `500` unexpected server error
 
-Pattern:
+Graceful degradation:
 
-- validation issues -> `400`
-- missing resource -> `404`
-- unsupported path -> `404`
-- unexpected failures -> `500`
-
-Search/extraction are designed to degrade gracefully:
-
-- embedding key unavailable -> non-vector behavior
-- LLM unavailable/fails -> simple mode behavior
+- no embedding key -> non-vector retrieval path still works
+- no LLM client or LLM failure -> simple retrieval/extraction fallback

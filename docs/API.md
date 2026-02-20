@@ -1,15 +1,22 @@
-# API Reference
+# 📘 API Reference
 
-All routes (except `/health`) require project context.
+All routes except `GET /health` require project context.
 
 Project context resolution:
 
 1. `x-project-id` header
-2. fallback to `CORE_DEFAULT_PROJECT_ID` if set
+2. fallback project id configured on server startup
 
-If missing, request fails with `400 project_id_required`.
+If neither is available, the request fails with `400`:
 
-## Health
+```json
+{
+  "error": "project_id_required",
+  "message": "Provide x-project-id header or configure defaultProjectId"
+}
+```
+
+## 🩺 Health
 
 ### GET `/health`
 
@@ -23,7 +30,7 @@ Returns service liveness:
 }
 ```
 
-## Memory events (SSE)
+## 📡 Memory Events (SSE)
 
 ### GET `/api/v1/events/memories`
 
@@ -31,7 +38,7 @@ Query params:
 
 - `subject_id` (optional)
 
-Event stream:
+Event types:
 
 - `connected`
 - `heartbeat`
@@ -40,7 +47,7 @@ Event stream:
 - `memory.updated`
 - `memory.deleted`
 
-## Memories
+## 🧠 Memories
 
 ### GET `/api/v1/memories`
 
@@ -61,23 +68,18 @@ Returns:
 Body:
 
 - `subject_id` (required)
-- `text` (required)
-- `kind` (optional)
-- `visibility` (optional)
-- `importance` (optional)
-- `confidence` (optional)
-- `is_temporal` (optional)
-- `tags` (optional)
-- `metadata` (optional)
-- `source_type` (optional)
+- `text` (required, max length `10000`)
+- `kind`, `visibility`, `importance`, `confidence`, `is_temporal`, `tags`, `metadata`, `source_type` (optional)
 - `id` (optional)
 - `extract_claims` (optional, default `true`)
 - `no_supersede` (optional, default `false`)
 
 Returns:
 
-- `201` `{ id, subject_id, text, kind, created: true, superseded_count, superseded_ids }`
-- `200` duplicate skip `{ id: null, subject_id, text, kind, created: false, skipped: true, reason: "duplicate" }`
+- `201` created:
+  - `{ id, subject_id, text, kind, created: true, superseded_count, superseded_ids }`
+- `200` duplicate skip:
+  - `{ id: null, subject_id, text, kind, created: false, skipped: true, reason: "duplicate" }`
 
 ### GET `/api/v1/memories/search`
 
@@ -87,13 +89,15 @@ Query params:
 - `q` (required)
 - `limit` (default `25`, max `200`)
 - `min_score` (default `30`)
-- `distance` (alias for `min_score`)
+- `distance` (alias of `min_score`)
 - `context` (repeatable; optional conversation context items)
 
 Returns:
 
-- `{ data, query, count, engine, mode, used_queries, predicates }` in expanded mode
-- `{ data, query, count, engine }` in fallback path
+- when recall service is configured (default in `src/dev.ts`):
+  - `{ data, query, count, engine, mode, used_queries, predicates }`
+- internal fallback path:
+  - `{ data, query, count, engine }`
 
 ### POST `/api/v1/memories/extract`
 
@@ -107,19 +111,16 @@ Body:
 
 Query params:
 
-- `learn=true|false` (optional override)
-- `force=true|false` (optional override)
+- `learn=true|false` (optional)
+- `force=true|false` (optional)
 
-Behavior:
+`learn`/`force` are enabled when either body or query sets them to `true`.
 
-- `learn=false` (default): extraction only
-- `learn=true`: also inserts memories/claims
-
-Returns (non-learn):
+Returns (extraction only):
 
 - `{ ok: true, learned: false, mode, extracted_count, memories }`
 
-Returns (learn):
+Returns (learn/write path):
 
 - `{ ok: true, learned: true, mode, extracted_count, learned_memory_count, learned_claim_count, memories }`
 
@@ -140,21 +141,25 @@ Returns:
 Query params:
 
 - `chat_id` OR `memory_id` (one required)
-- `stats=true|false` (used with `memory_id`)
+- `stats=true|false` (used only with `memory_id` path)
 - `limit` (default `100`, max `1000`)
 
-Returns:
+Response modes:
 
-- by chat: `{ data, count, chat_id }`
-- by memory: `{ data, count, memory_id }`
-- stats: `{ memory_id, stats }`
+- by chat (`chat_id` provided): `{ data, count, chat_id }`
+- by memory (`memory_id` + no stats): `{ data, count, memory_id }`
+- memory stats (`memory_id` + `stats=true`): `{ memory_id, stats }`
+
+Note:
+
+- if both `chat_id` and `memory_id` are provided, `chat_id` path is used.
 
 ### GET `/api/v1/memories/:id`
 
 Returns:
 
 - `{ data: Memory }`
-- `404` `memory_not_found` or `memory_deleted`
+- `404` with `memory_not_found` or `memory_deleted`
 
 ### PATCH `/api/v1/memories/:id`
 
@@ -165,11 +170,11 @@ Body (any subset):
 Returns:
 
 - `{ id, updated: true }`
-- `404` `memory_not_found` or `memory_deleted`
+- `404` with `memory_not_found` or `memory_deleted`
 
 ### DELETE `/api/v1/memories/:id`
 
-Soft-delete.
+Soft delete.
 
 Returns:
 
@@ -177,9 +182,14 @@ Returns:
 
 ### GET `/api/v1/memories/:id/claims`
 
-Returns assertion-centric view:
+Returns assertion-centric claims linked to memory:
 
 - `{ data: [{ id, predicate, type, value, confidence, status, first_seen_at, last_seen_at }], count }`
+
+Errors:
+
+- `404` `memory_not_found`
+- `404` `memory_deleted`
 
 ### POST `/api/v1/memories/:id/restore`
 
@@ -190,16 +200,14 @@ Returns:
 - `400` `memory_deleted`
 - `404` `memory_not_found`
 
-## Claims
+## 🧩 Claims
 
 ### POST `/api/v1/claims`
 
 Body:
 
-- `subject_id` (required)
-- `predicate` (required)
-- `object_value` (required)
-- `claim_type`, `slot`, `confidence`, `importance`, `tags`, `source_memory_id`, `source_observation_id`, `subject_entity`, `valid_from`, `valid_until` (optional)
+- required: `subject_id`, `predicate`, `object_value`
+- optional: `claim_id`, `claim_type`, `slot`, `confidence`, `importance`, `tags`, `source_memory_id`, `source_observation_id`, `subject_entity`, `valid_from`, `valid_until`
 
 Returns:
 
@@ -209,7 +217,7 @@ Returns:
 
 Body:
 
-- `reason` (optional)
+- `reason` (optional, default `manual_retraction`)
 
 Returns:
 
@@ -220,6 +228,11 @@ Returns:
 Returns:
 
 - `{ claim, assertions, edges, supersession_chain }`
+
+Notes:
+
+- `claim` excludes embedding field
+- `supersession_chain` is filtered from `edges` where `edge_type = supersedes`
 
 ### GET `/api/v1/claims/subject/:subjectId/truth`
 
@@ -236,7 +249,7 @@ Returns:
 Returns:
 
 - `{ subject_id, project_id, slot, active_claim_id, predicate, object_value, claim_type, confidence, updated_at, tags, source }`
-- `404` for missing slot
+- `404` `slot_not_found`
 
 ### GET `/api/v1/claims/subject/:subjectId/slots`
 
@@ -244,7 +257,7 @@ Query params:
 
 - `limit` (default `100`, max `500`)
 
-Returns grouped slot state:
+Returns grouped slot states:
 
 - `{ subject_id, total, active_count, slots: { active, superseded, other } }`
 
@@ -269,21 +282,18 @@ Returns:
 
 - `{ subject_id, project_id, slot_filter, by_slot, edges, total_claims }`
 
-## Error conventions
+## ⚠️ Error Conventions
 
-Common response shapes:
+Common error payloads:
 
-- validation error:
-  - `{ error: "field_required" }`
-- not found:
-  - `{ error: "resource_not_found" }`
-- server error:
-  - `{ error: "server_error", message: "..." }`
+- validation: `{ error: "subject_id_required" }`, `{ error: "q_required" }`, `{ error: "invalid_json_body" }`
+- not found: `{ error: "memory_not_found" }`, `{ error: "claim_not_found" }`, `{ error: "slot_not_found" }`, `{ error: "not_found" }`
+- server error: `{ error: "server_error", message: "..." }`
 
-Status usage:
+Status codes:
 
 - `200` success
 - `201` created
-- `400` invalid/missing input
-- `404` missing resource
-- `500` unexpected failure
+- `400` validation/input
+- `404` not found
+- `500` unexpected server error

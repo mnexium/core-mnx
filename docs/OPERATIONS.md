@@ -1,144 +1,116 @@
-# Operations Playbook
+# 🛠️ Operations Playbook
 
-This guide covers how to run CORE confidently in production-like environments and how to extend it for your platform standards.
+This guide focuses on production hardening for CORE deployments.
 
-## Deployment baseline
+## 🧱 Deployment Baseline
 
 Recommended baseline:
 
-- 1+ stateless app instances
+- 1+ stateless CORE instances
 - managed Postgres with `pgvector`
-- reverse proxy/load balancer with tuned timeouts
+- reverse proxy/load balancer with tuned upstream timeouts
 - centralized logs + metrics
 
-For multi-instance real-time fanout, add external pub/sub (Redis/NATS/Kafka).
+For multi-instance event fanout, add external pub/sub.
 
-## Production integration layers
+## 🔐 Platform Integrations to Add
 
-CORE is designed to plug into your existing platform controls.
+CORE intentionally leaves platform controls to the host system. Typical production additions:
 
-Typical additions:
+1. Auth (API keys/JWT) and route-level scopes
+2. Tenant boundary checks
+3. Idempotency keys for writes
+4. External event transport for SSE fanout
+5. Alerting + SLO dashboards
 
-1. Auth and scoped API keys
-2. Idempotency keys for write routes
-3. External event transport for multi-instance SSE
-4. Observability/alerting stack
+## 🔁 Idempotency Guidance
 
-## Identity and access integration
+Write routes can be retried by clients/proxies. Add:
 
-Current request context is project-based (`x-project-id` or default project).
+- `Idempotency-Key` for `POST/PATCH/DELETE`
+- persisted request fingerprint and response body
+- replay of original success response for duplicate key
 
-Production integration:
+## 📡 SSE at Scale
 
-- API key validation middleware
-- per-route scope checks
-- tenant boundary enforcement
+Current behavior:
 
-## Idempotent writes
+- memory events are emitted from an in-process bus
+- subscribers connected to instance A will not receive events produced on instance B
 
-Write routes may be retried by clients or proxies.
+Production recommendation:
 
-Recommended:
+- publish lifecycle events to Redis/NATS/Kafka
+- fan out consistently across all API instances
 
-- support `Idempotency-Key` for `POST/PATCH/DELETE`
-- persist request/result fingerprints
-- return original success response on duplicate keys
+## 🗄️ Database Operations
 
-## Observability model
+### Migrations
 
-Track at minimum:
+- keep `sql/postgres/schema.sql` as bootstrap baseline
+- run versioned forward migrations in CI/CD
+- avoid startup-time auto-migration in production paths
+
+### Backup and recovery
+
+- daily full backup + PITR
+- regular restore drills
+- documented recovery RTO/RPO targets
+
+### Vector index hygiene
+
+- run `ANALYZE` after significant ingest batches
+- monitor query plans and latency
+- tune ivfflat list settings as corpus grows
+
+## 📈 Observability Model
+
+Track:
 
 - request rate and latency (`p50`, `p95`, `p99`)
-- response status distribution
+- status code distribution
 - DB query latency/error rate
 - LLM provider latency/error rate
 - SSE subscriber counts
 
-Add alerts for:
+Alert on:
 
 - sustained 5xx error rate
-- DB saturation
-- high tail latency
+- DB saturation / connection pool pressure
+- high tail latency regressions
 
-## SSE at scale
+## 🤖 Runtime Adaptation (Accuracy Notes)
 
-Current event bus is process-local.
+Provider selection in `src/dev.ts`:
 
-Single-instance:
+- `CORE_AI_MODE=auto`: Cerebras -> OpenAI -> simple
+- `CORE_AI_MODE=cerebras` without key: simple fallback (no OpenAI auto-switch)
+- `CORE_AI_MODE=openai` without key: simple fallback (no Cerebras auto-switch)
 
-- full event coverage in one process
+Retrieval behavior:
 
-Multi-instance:
+- `USE_RETRIEVAL_EXPAND=true`: LLM classify/expand/rerank if LLM exists
+- `USE_RETRIEVAL_EXPAND=false`: simple retrieval path
 
-- use external pub/sub so all subscribers receive all events
+Embedding behavior:
 
-## Database operations
+- missing `OPENAI_API_KEY` causes embedder to return empty vectors
+- write/read APIs continue; retrieval uses lexical/non-vector scoring path
 
-## Migration strategy
-
-Recommended:
-
-- versioned SQL migrations
-- keep `schema.sql` as bootstrap baseline
-- apply schema changes explicitly in CI/CD pipeline
-
-## Backup and recovery
-
-Recommended:
-
-- daily full backups
-- point-in-time recovery enabled
-- regular restore drills
-
-## Vector index hygiene
-
-For `pgvector` ivfflat indexes:
-
-- run `ANALYZE` after significant ingests
-- monitor plans/performance
-- tune list count as dataset grows
-
-## Runtime adaptation behavior
-
-CORE keeps responses available under varied key/model configurations.
-
-### LLM provider selection
-
-- `CORE_AI_MODE=auto`:
-  - uses Cerebras when key exists
-  - else OpenAI when key exists
-  - else simple mode
-
-### Retrieval expansion control
-
-- `USE_RETRIEVAL_EXPAND=true`: expanded retrieval flow
-- `USE_RETRIEVAL_EXPAND=false`: simple retrieval flow
-
-### Embedding key behavior
-
-- if embedding key is unavailable, write APIs still function
-- search continues in non-vector mode
-
-## Data semantics
-
-### Deletion
+## 🧾 Data Semantics in Production
 
 - memory deletion is soft (`is_deleted=true`)
+- supersession uses `status='superseded'` and `superseded_by`
+- truth state is read from `slot_state` joined with active claims
+- claim retraction may restore previous slot winner
 
-### Supersession
+## ✅ Hardening Checklist
 
-- modeled via `status` + `superseded_by`
-- can be managed by your chosen write workflows/policies
-
-### Truth state
-
-- `slot_state` is authoritative for active slot winners
-- claim retraction can restore prior winners
-
-## Suggested implementation order
-
-1. Integrate auth/scopes
-2. Add idempotency key support
-3. Externalize SSE bus
-4. Expand test coverage (integration + load)
-5. Add SLO-driven monitoring/alerts
+- [ ] Auth + scope middleware in front of CORE routes
+- [ ] Explicit tenant/project isolation strategy
+- [ ] Idempotency-key storage and replay implemented
+- [ ] Externalized SSE/event transport for multi-instance deployments
+- [ ] Migration workflow in CI/CD
+- [ ] Backup + restore drill cadence defined
+- [ ] SLOs + alerts configured
+- [ ] Load/perf test against expected traffic profile
