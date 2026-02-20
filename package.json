@@ -1,0 +1,20 @@
+{
+  "name": "@mnexium/core",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "tsx src/dev.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "e2e": "bash scripts/e2e.sh",
+    "e2e:web": "node scripts/e2e.webapp.mjs"
+  },
+  "dependencies": {
+    "dotenv": "^17.2.3",
+    "pg": "^8.18.0"
+  },
+  "devDependencies": {
+    "tsx": "^4.20.5",
+    "typescript": "^5.9.3"
+  }
+}
