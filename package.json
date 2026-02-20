@@ -2,6 +2,14 @@
   "name": "@mnexium/core",
   "version": "0.1.1",
   "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/mnexium/core-mnx"
+  },
+  "homepage": "https://github.com/mnexium/core-mnx",
+  "bugs": {
+    "url": "https://github.com/mnexium/core-mnx/issues"
+  },
   "publishConfig": {
     "access": "public"
   },
