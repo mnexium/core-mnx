@@ -29,13 +29,26 @@ Configured by `CORE_AI_MODE`:
 - `simple`
 - `auto` (default)
 
-Provider resolution in `auto`:
+Resolution rules:
 
-1. If `CEREBRAS_API` exists -> Cerebras client
-2. Else if `OPENAI_API_KEY` exists -> OpenAI client
-3. Else -> simple mode
+- `auto`
+  - if `CEREBRAS_API` exists -> use Cerebras
+  - else if `OPENAI_API_KEY` exists -> use OpenAI
+  - else -> use simple mode
+- `cerebras`
+  - requires `CEREBRAS_API`
+  - if missing -> warning + simple mode
+  - does not auto-switch to OpenAI
+- `openai`
+  - requires `OPENAI_API_KEY`
+  - if missing -> warning + simple mode
+  - does not auto-switch to Cerebras
+- `simple`
+  - always simple mode, no LLM client
 
 `RETRIEVAL_MODEL` is passed to the selected LLM provider.
+
+Both retrieval (`/memories/search`) and extraction (`/memories/extract`) use the resolved LLM client when available. If no LLM client is resolved, both routes still run using simple fallback behavior.
 
 ## Retrieval expansion toggle
 
@@ -49,20 +62,47 @@ Provider resolution in `auto`:
   - if no LLM client exists, simple search path is used
 - `false`
   - always uses simple search path, even if LLM keys are present
+  - extraction still uses LLM if an LLM client exists (toggle is retrieval-only)
 
 ## Search behavior (`GET /api/v1/memories/search`)
+
+### Query mode semantics (`broad|direct|indirect`)
+
+Classification output controls how recall is executed:
+
+- `broad`
+  - intent: profile/summary requests (for example, "what do you know about this user?")
+  - path: list active memories, then sort by `importance` and recency
+  - behavior: bypasses multi-query expansion and reranking; returns a wider profile set (`max(limit, 20)`)
+- `direct`
+  - intent: specific fact lookup (for example, "what city does she live in?")
+  - path: search using original query + LLM search hints, then attempt claim/truth-based boosts for matched predicates
+  - behavior: prefers high-precision results; typically narrows to small result sets (often capped to top 5)
+- `indirect`
+  - intent: advice/planning prompts where personal context may help (for example, "what gift should I get him?")
+  - path: search using original query + hints + expanded paraphrases, then optional LLM rerank
+  - behavior: broader candidate gathering with relevance refinement
+
+Classification fallback:
+
+- if classify call fails or returns invalid mode, CORE defaults to `indirect`
+- if query text is empty, search returns no memories
 
 ### LLM expanded mode
 
 Flow:
 
-1. classify query mode and hints
-2. build query set (original + hints + expansions)
+1. classify query mode and hints/predicates
+2. build query set:
+   - `broad`: no query set expansion path; profile listing path is used
+   - `direct`: original + search hints
+   - `indirect`: original + search hints + expanded queries
 3. search each query with embedding + lexical fallback
    - lexical matching includes whole-phrase and token-level matching
 4. merge/deduplicate by memory id
-5. direct mode: may boost memory-backed truth facts
-6. indirect mode: rerank via LLM
+5. apply mode-specific ranking:
+   - `direct`: may boost memory-backed truth facts; reranks only in overflow cases
+   - `indirect`: reranks via LLM when candidate set is larger than `limit`
 
 Response includes:
 

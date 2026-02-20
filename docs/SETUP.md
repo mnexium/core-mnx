@@ -1,44 +1,50 @@
 # Setup and Initialization
 
-This document explains how to bootstrap CORE locally or in a fresh environment.
+This guide covers local bootstrap, required environment setup, validation, and E2E workflows for CORE.
 
 ## 1. Prerequisites
 
 - Node.js 18+ (Node 20+ recommended)
 - Postgres 14+ (15+ recommended)
 - `psql` CLI
+- Docker (optional, for E2E and dashboard workflows)
 
-Recommended Postgres extensions:
+Recommended Postgres extension:
 
 - `pgvector` (required by schema for vector search)
+
+
+#### Highly reccommend the docker runbook path in Path A
+---
+
 
 ## 2. Install dependencies
 
 ```bash
-npm --prefix /Users/mariusndini/Documents/GitHub/mnexium.com/CORE install
+npm install
 ```
 
-## 3. Create env file
+## 3. Create `.env`
 
 ```bash
-cp /Users/mariusndini/Documents/GitHub/mnexium.com/CORE/.env.example /Users/mariusndini/Documents/GitHub/mnexium.com/CORE/.env
+cp .env.example .env
 ```
 
-Populate `/Users/mariusndini/Documents/GitHub/mnexium.com/CORE/.env` with values for your environment.
+Populate `.env` with values for your environment.
 
 ## 4. Create database objects (required)
 
-CORE does not run schema creation automatically at startup.
+CORE does not auto-create schema at startup.
 
-You must apply:
+Apply:
 
-`/Users/mariusndini/Documents/GitHub/mnexium.com/CORE/sql/postgres/schema.sql`
+`sql/postgres/schema.sql`
 
 Example:
 
 ```bash
 psql "postgresql://USER:PASSWORD@HOST:5432/DB" \
-  -f /Users/mariusndini/Documents/GitHub/mnexium.com/CORE/sql/postgres/schema.sql
+  -f sql/postgres/schema.sql
 ```
 
 This script creates:
@@ -54,7 +60,7 @@ This script creates:
 ## 5. Start server
 
 ```bash
-npm --prefix /Users/mariusndini/Documents/GitHub/mnexium.com/CORE run dev
+npm run dev
 ```
 
 Default bind:
@@ -62,8 +68,6 @@ Default bind:
 - `http://localhost:8080`
 
 ## 6. Validate startup
-
-Health endpoint:
 
 ```bash
 curl -s http://localhost:8080/health
@@ -74,6 +78,127 @@ Expected:
 ```json
 {"ok":true,"service":"mnexium-core","timestamp":"..."}
 ```
+
+## End-to-end route test
+
+Run the full Docker-backed E2E suite (boots Postgres, applies schema, starts CORE, tests all routes):
+
+```bash
+npm run e2e
+```
+
+Optional overrides:
+
+- `CORE_E2E_DB_IMAGE` (default `pgvector/pgvector:pg16`)
+- `CORE_E2E_DB_PORT` (default `5432`)
+- `CORE_E2E_SERVER_PORT` (default `18080`)
+- `CORE_E2E_KEEP_DB=true` to keep container after test
+
+## Browser test dashboard
+
+Start the local dashboard:
+
+```bash
+npm run e2e:web
+```
+
+Then open:
+
+- `http://localhost:8091`
+
+The dashboard lets you:
+
+- input CORE base URL + project/subject IDs
+- input Postgres connection settings
+- run a live status check for CORE and Postgres
+- run the full route suite with step-by-step logs and pass/fail status
+- use a `Memories` tab for list/search/create operations
+- use a `Routes` tab with one card per API route, prefilled example payloads, and run buttons
+
+Optional web dashboard env vars:
+
+- `CORE_E2E_WEB_PORT` (default `8091`)
+- `CORE_E2E_WEB_HOST` (default `127.0.0.1`)
+- `CORE_E2E_WEB_DB_HOST` (default `127.0.0.1`)
+- `CORE_E2E_WEB_DB_PORT` (default `5432`)
+- `CORE_E2E_WEB_DB_NAME` (default `mnexium_core`)
+- `CORE_E2E_WEB_DB_USER` (default `mnexium`)
+- `CORE_E2E_WEB_DB_PASSWORD` (default `mnexium_dev_password`)
+
+## Exact runbook (copy/paste)
+
+### Path A: Recommended (dashboard + persistent local Docker Postgres)
+
+1. Start Postgres in Docker on port `5432`:
+
+```bash
+docker rm -f mnx-core-db >/dev/null 2>&1 || true
+docker run -d \
+  --name mnx-core-db \
+  -e POSTGRES_DB=mnexium_core \
+  -e POSTGRES_USER=mnexium \
+  -e POSTGRES_PASSWORD=mnexium_dev_password \
+  -p 5432:5432 \
+  pgvector/pgvector:pg16
+```
+
+2. Apply schema:
+
+```bash
+cat sql/postgres/schema.sql | docker exec -i mnx-core-db psql -U mnexium -d mnexium_core
+```
+
+3. Start CORE API (after setting `.env`):
+
+```bash
+npm run dev
+```
+
+4. Start dashboard in a second terminal:
+
+```bash
+npm run e2e:web
+```
+
+5. Open dashboard:
+
+```text
+http://127.0.0.1:8091
+```
+
+6. Dashboard values:
+
+- `Core Base URL`: `http://127.0.0.1:8080`
+- `Project ID`: `default-project`
+- `Subject ID`: `user_web_e2e`
+- `Postgres Host`: `127.0.0.1`
+- `Postgres Port`: `5432`
+- `Postgres DB`: `mnexium_core`
+- `Postgres User`: `mnexium`
+- `Postgres Password`: `mnexium_dev_password`
+
+Then click:
+
+- `Check Status`
+- `Run Full Route Suite`
+- switch to `Memories` tab for list/search/create
+
+### Path B: One-shot Docker E2E script
+
+```bash
+npm run e2e
+```
+
+To keep the DB container after the run:
+
+```bash
+CORE_E2E_KEEP_DB=true npm run e2e
+```
+
+Notes:
+
+- `e2e` starts CORE on port `18080` temporarily for the suite, then stops it.
+- Use Path A for ongoing dashboard usage.
 
 ## Environment variables reference
 
